@@ -21,6 +21,14 @@ git clone https://github.com/GabrieleGroppoUni03/MSAFR.git
 cd MSAFR
 pip install -r requirements.txt
 ```
+### requirements.txt
+```plain-text
+pandas
+openpyxl
+```
+
+### jpegoptim
+https://github.com/tjko/jpegoptim
 
 ## 📂 Utilizzo  
 Esegui lo script passando la stagione e il brand:  
