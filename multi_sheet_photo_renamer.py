@@ -18,7 +18,7 @@ BRAND_COLUMN_MAPPINGS = {
     "liujo": ["Modello", "Parte", "Colore"],
     "furla": ["Modello", "Parte", "Colore", "TipoVariante"],
     "alviero": ["Linea", "Modello", "Tessuto", "Colore"],
-    "moschino": ["Campo1", "Campo2"]
+    "brand": ["Campo1", "Campo2"]
 }
 
 # EAN column name
