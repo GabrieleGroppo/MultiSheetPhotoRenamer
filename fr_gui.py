@@ -7,17 +7,21 @@ import importlib.util
 import logging
 from datetime import datetime
 
+def main():
+    root = tk.Tk()
+    PhotoRenamerGUI(root)
+    root.mainloop()
+
 class PhotoRenamerGUI:
     def __init__(self, master):
         # Configure logging
         self.setup_logging()
-
         # Main window setup
         self.master = master
         master.title("Multi Sheet Awesome Photo Renamer")
         master.geometry("700x800")
 
-        # Import the original module
+        # Import the Multi Sheet Awesome Photo Renamer module
         try:
             self.renamer_module = self.import_renaming_module()
         except Exception as e:
@@ -27,6 +31,7 @@ class PhotoRenamerGUI:
         # Create main frame
         self.create_ui_components()
 
+    # Setup logging
     def setup_logging(self):
         """Set up logging configuration"""
         # Create logs directory if it doesn't exist
@@ -47,8 +52,8 @@ class PhotoRenamerGUI:
         )
         self.logger = logging.getLogger(__name__)
 
+    # Import the renaming module Multi Sheet Awesome Photo Renamer
     def import_renaming_module(self):
-        """Dynamically import the original renaming script with error handling"""
         try:
             script_path = os.path.join(os.path.dirname(__file__), 'multi_sheet_photo_renamer.py')
             spec = importlib.util.spec_from_file_location("multi_sheet_photo_renamer", script_path)
@@ -60,8 +65,8 @@ class PhotoRenamerGUI:
             self.logger.error(f"Failed to import renaming module: {e}")
             raise
 
+    # Create input fields and labels
     def create_ui_components(self):
-        """Create and layout UI components"""
         # Main frame
         self.main_frame = ttk.Frame(self.master, padding="10 10 10 10")
         self.main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -73,7 +78,6 @@ class PhotoRenamerGUI:
         self.brand_var = tk.StringVar()
         self.photo_folder_var = tk.StringVar()
         self.excel_file_var = tk.StringVar()
-        self.output_folder_var = tk.StringVar()
         self.optimize_var = tk.BooleanVar(value=True)
 
         # Create input fields and labels
@@ -109,11 +113,6 @@ class PhotoRenamerGUI:
         ttk.Entry(self.main_frame, textvariable=self.excel_file_var, width=40).grid(row=3, column=1, sticky=tk.W, pady=5)
         ttk.Button(self.main_frame, text="Browse", command=self.browse_excel_file).grid(row=3, column=2, sticky=tk.W, pady=5)
 
-        # Output folder selection
-        ttk.Label(self.main_frame, text="Output Folder (optional):").grid(row=4, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(self.main_frame, textvariable=self.output_folder_var, width=40).grid(row=4, column=1, sticky=tk.W, pady=5)
-        ttk.Button(self.main_frame, text="Browse", command=self.browse_output_folder).grid(row=4, column=2, sticky=tk.W, pady=5)
-
         # Columns selection
         ttk.Label(self.main_frame, text="Columns to Match:").grid(row=5, column=0, sticky=tk.W, pady=5)
         self.columns_listbox = tk.Listbox(self.main_frame, selectmode=tk.MULTIPLE, width=40, height=6)
@@ -124,23 +123,23 @@ class PhotoRenamerGUI:
         ttk.Checkbutton(self.main_frame, text="Optimize Images", variable=self.optimize_var).grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=5)
 
         # Run button
-        ttk.Button(self.main_frame, text="Rename Photos", command=self.rename_photos).grid(row=7, column=0, columnspan=3, pady=10)
+        ttk.Button(self.main_frame, text="Rename Photos", command=self.print_selected_fields).grid(row=7, column=0, columnspan=3, pady=10)
 
     def create_log_area(self):
-        """Create log text area with scrollbar"""
         self.log_text = tk.Text(self.main_frame, width=80, height=15, wrap=tk.WORD)
         self.log_text.grid(row=8, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
         log_scrollbar = ttk.Scrollbar(self.main_frame, orient=tk.VERTICAL, command=self.log_text.yview)
         log_scrollbar.grid(row=8, column=3, sticky=(tk.N, tk.S))
         self.log_text.configure(yscroll=log_scrollbar.set)
 
+    # Load folder containing photos
     def browse_photo_folder(self):
-        """Open folder selection dialog for photos"""
         folder_selected = filedialog.askdirectory()
         if folder_selected:
             self.photo_folder_var.set(folder_selected)
             self.logger.info(f"Photo folder selected: {folder_selected}")
 
+    # Load Excel file
     def browse_excel_file(self):
         """Open file selection dialog for Excel file"""
         file_selected = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
@@ -149,15 +148,8 @@ class PhotoRenamerGUI:
             self.load_excel_columns()
             self.logger.info(f"Excel file selected: {file_selected}")
 
-    def browse_output_folder(self):
-        """Open folder selection dialog for output"""
-        folder_selected = filedialog.askdirectory()
-        if folder_selected:
-            self.output_folder_var.set(folder_selected)
-            self.logger.info(f"Output folder selected: {folder_selected}")
-
+    # Load columns from Excel file
     def load_excel_columns(self):
-        """Load columns from the selected Excel file"""
         excel_file = self.excel_file_var.get()
         if not excel_file:
             messagebox.showwarning("Warning", "Please select an Excel file first.")
@@ -178,121 +170,17 @@ class PhotoRenamerGUI:
             self.logger.error(f"Could not read Excel file: {e}")
             messagebox.showerror("Error", f"Could not read Excel file: {e}")
 
-    def rename_photos(self):
-        """Perform photo renaming with GUI inputs"""
-        # Validate inputs
+    def print_selected_fields(self):
         season = self.season_var.get().strip()
         brand = self.brand_var.get()
         photo_folder = self.photo_folder_var.get()
         excel_file = self.excel_file_var.get()
-        output_folder = self.output_folder_var.get()
 
-        # Validate required fields
-        if not all([season, brand, photo_folder, excel_file]):
-            messagebox.showwarning("Warning", "Please fill in all required fields.")
-            return
+        self.logger.info(f"Season: {season}")
+        self.logger.info(f"Brand: {brand}")
+        self.logger.info(f"Photo Folder: {photo_folder}")
+        self.logger.info(f"Excel File: {excel_file}")
 
-        # Get selected columns
-        selected_columns_indices = self.columns_listbox.curselection()
-        if not selected_columns_indices:
-            # If no columns selected, use default for the brand
-            selected_columns = self.renamer_module.BRAND_COLUMN_MAPPINGS.get(brand, [])
-        else:
-            # Get selected column names
-            selected_columns = [self.columns_listbox.get(i) for i in selected_columns_indices]
-
-        try:
-            # Create output folder if it doesn't exist
-            if output_folder and not os.path.exists(output_folder):
-                os.makedirs(output_folder)
-
-            # Redirect stdout to log area
-            import io
-            import sys
-            log_capture = io.StringIO()
-            sys.stdout = log_capture
-
-            # Custom renaming function that uses GUI inputs
-            self.custom_rename_process(season, brand, photo_folder, excel_file, output_folder, selected_columns)
-
-            # Restore stdout and show log
-            sys.stdout = sys.__stdout__
-            log_output = log_capture.getvalue()
-            self.log_text.delete(1.0, tk.END)
-            self.log_text.insert(tk.END, log_output)
-
-            messagebox.showinfo("Success", "Photo renaming completed successfully!")
-            self.logger.info("Photo renaming process completed successfully")
-
-        except Exception as e:
-            self.logger.error(f"An error occurred during photo renaming: {e}")
-            messagebox.showerror("Error", f"An error occurred: {e}")
-
-    def custom_rename_process(self, season, brand, photo_folder, excel_file, output_folder, selected_columns):
-        """Custom process for renaming photos with additional handling"""
-        # Create a base directory if not exists
-        base_dir = f"./{season}"
-        os.makedirs(base_dir, exist_ok=True)
-
-        # Prepare paths
-        output_photos_dir = os.path.join(base_dir, self.renamer_module.DEFAULT_PHOTOS_SUBDIR, brand)
-        reports_dir = os.path.join(base_dir, self.renamer_module.DEFAULT_REPORTS_SUBDIR)
-
-        # Copy photos to output directory if specified
-        if output_folder:
-            import shutil
-            os.makedirs(output_photos_dir, exist_ok=True)
-            for filename in os.listdir(photo_folder):
-                if filename.lower().endswith(self.renamer_module.FILE_EXTENSION):
-                    shutil.copy(
-                        os.path.join(photo_folder, filename), 
-                        os.path.join(output_photos_dir, filename)
-                    )
-            photo_folder_to_use = output_photos_dir
-        else:
-            photo_folder_to_use = photo_folder
-
-        # Prepare Excel file
-        excel_output_dir = os.path.join(base_dir, self.renamer_module.DEFAULT_EXCELS_SUBDIR)
-        os.makedirs(excel_output_dir, exist_ok=True)
-        excel_output_path = os.path.join(excel_output_dir, f"{brand}.xlsx")
-        
-        import shutil
-        shutil.copy(excel_file, excel_output_path)
-
-        # Run image optimization if checkbox is checked
-        if self.optimize_var.get():
-            self.renamer_module.optimize_images_in_folder(photo_folder_to_use)
-
-        print(f"Using photo folder: {photo_folder_to_use}")
-        print(f"Using Excel file: {excel_output_path}")
-        print(f"Columns to match: {selected_columns}")
-        
-        # Call the original renaming function
-        return self.renamer_module.rinomina_foto_in_batch(
-            season=season, 
-            brand_name=brand, 
-            #photo_folder=photo_folder_to_use,
-            #excel_file=excel_output_path,
-            #columns_to_match=selected_columns,
-            #reports_folder=reports_dir
-        )
-
-def main():
-    """Main function to launch the GUI"""
-    root = tk.Tk()
-    PhotoRenamerGUI(root)
-    root.mainloop()
-
-def run_with_cli_args():
-    """Run the script with command-line arguments"""
-    if len(sys.argv) > 2:
-        # If CLI arguments are provided, use the original script's main function
-        original_module = importlib.import_module('multi_sheet_photo_renamer')
-        original_module.main()
-    else:
-        # Otherwise, launch the GUI
-        main()
-
+# Main function
 if __name__ == "__main__":
-    run_with_cli_args()
+    main()
