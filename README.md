@@ -36,7 +36,22 @@ Esegui lo script passando la stagione e il brand:
 python MSAPRO.py stagione brand
 ```
 
+Formato cartelle
+```
+📁 Progetto (dove tieni lo script .py)
+└── 📁 pe25                 <-- Season name Folder
+    ├── 📁 excels           <-- 'excels' folder
+    │   └── liujo.xlsx      <-- Excel file must be named as brand
+    └── 📁 photoes          <-- 'photos' folder
+        └── 📁 liujo        <-- brand name subfolder
+            ├── foto1.jpg   <-- Photos goes here
+            └── foto2.jpg
+```
+
 ## 📜 Licenza  
 GNU License  
 
 ---
+
+
+

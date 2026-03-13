@@ -8,7 +8,7 @@ from datetime import datetime
 # This is the: MULTI SHEET AWESOME PHOTO RENAMER [MSAFR for friends]
 # Constants
 DEFAULT_REPORTS_SUBDIR = "reports"
-DEFAULT_PHOTOS_SUBDIR = "photoes"
+DEFAULT_PHOTOS_SUBDIR = "photos"
 DEFAULT_EXCELS_SUBDIR = "excels"
 FILE_EXTENSION = ".jpg"
 
