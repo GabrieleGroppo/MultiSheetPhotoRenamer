@@ -169,3 +169,12 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+#Photoes
+photoes/
+
+# Materiale cliente (foto + excel) caricato per l'esecuzione della skill photo-renamer
+assets/
+
+# Permessi/impostazioni locali di Claude Code (personali, non da versionare)
+.claude/settings.local.json

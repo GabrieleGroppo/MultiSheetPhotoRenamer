@@ -1,0 +1,9 @@
+{
+  "ean_column": "BARCODE",
+  "code_columns": [
+    "Modello",
+    "Parte",
+    "Colore"
+  ],
+  "notes": "Auto-rilevato su ai26: filename = Modello+Parte+Colore concatenati, seguito da _SN<seriale>_CLOSEUP<nn>"
+}
