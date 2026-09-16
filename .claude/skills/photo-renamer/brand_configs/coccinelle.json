@@ -1,0 +1,9 @@
+{
+  "ean_column": "Barcode EAN13",
+  "code_columns": [
+    "Modello",
+    "Codice colore"
+  ],
+  "swatch_position": null,
+  "notes": "Auto-rilevato su ai26: filename = Modello(spazi rimossi)+Codice colore, poi _<indice 0-3>/_SWATCH. Il token '_SWATCH' identifica il campione colore (verificato visivamente): niente swatch_position posizionale necessario, basta il rilevamento per parola chiave."
+}

@@ -10,9 +10,12 @@ Se --ean-column/--code-columns non sono passati, viene usata la
 configurazione salvata in brand_configs/<brand>.json (vedi save_brand_config.py).
 
 Logica di matching per ogni riga (deduplicata per EAN):
-  1. match ESATTO: il token iniziale del nome file (prima del primo "_"/"-")
-     coincide (case-insensitive) con la concatenazione di TUTTE le colonne
-     codice non vuote per quella riga.
+  1. match ESATTO: il nome file viene spezzato in token separati da "_"/"-"/
+     spazi; si prova a concatenare i primi k token (k=1,2,3,...) finche' il
+     risultato coincide (case-insensitive) con la concatenazione di TUTTE le
+     colonne codice non vuote per quella riga. Serve perche' il codice puo'
+     stare in un solo token (es. "91010339X95219_SN...") oppure su piu' token
+     consecutivi (es. "E1M50120101_352_0" = modello + colore, poi indice foto).
   2. se nessun match esatto, fallback PARZIALE: tutte le colonne codice non
      vuote compaiono come sottostringa nel nome file (matching per substring,
      come nello script originale).
@@ -21,6 +24,21 @@ Logica di matching per ogni riga (deduplicata per EAN):
      rinomina nulla per quell'EAN: probabilmente le colonne scelte sono
      troppo generiche. Viene riportato in un report dedicato per revisione
      manuale, invece di rinominare a caso.
+
+Le foto rinominate con successo vengono spostate nella sottocartella
+"rinominate/" (dentro la cartella del brand), cosi' restano separate dagli
+originali non ancora processati e da eventuali foto senza corrispondenza.
+
+Foto "campione colore" (senza il prodotto): alcuni brand includono, per ogni
+prodotto, una foto che mostra solo il colore/materiale e non la borsa/gadget.
+Vengono escluse dalla rinomina e spostate in "scartate/" (mai cancellate) in
+due modi:
+  a) parola chiave nel nome file (swatch/colore/color/colour) - deterministico;
+  b) se il brand ha "swatch_position": "first"/"last" in config (dedotto una
+     tantum da Claude guardando visivamente un campione di prodotto), si
+     scarta sempre la prima/ultima foto di ogni serie - ma solo se restano
+     almeno 2 foto dopo aver tolto quelle già escluse per parola chiave (mai
+     azzerare le foto di un prodotto).
 """
 import argparse
 import csv
@@ -32,12 +50,44 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from brand_config import load_config
-from discovery import code_token, find_excel, list_photos, require_brand_dir
+from discovery import find_excel, list_photos, natural_sort_key, require_brand_dir, stem_tokens
 from xlsx_reader import read_workbook
 
 RED_FLAG_THRESHOLD = 7
 MAX_SIZE_MB = 1
+RENAMED_SUBDIR = "rinominate"
+DISCARDED_SUBDIR = "scartate"
 JPEG_QUALITY = 85
+SWATCH_KEYWORDS = ("swatch", "colore", "color", "colour")
+
+
+def is_keyword_swatch(filename):
+    """True se un token del nome file indica esplicitamente un campione colore."""
+    tokens = [t.lower() for t in stem_tokens(filename)]
+    return any(keyword in token for token in tokens for keyword in SWATCH_KEYWORDS)
+
+
+def split_swatches(candidates, swatch_position):
+    """Ritorna (foto_prodotto, foto_scartate_con_motivo).
+
+    Rimuove prima le foto con parola chiave colore nel nome, poi - se
+    swatch_position e' "first"/"last" e restano almeno 2 foto - anche quella
+    in quella posizione della serie (ordinata con natural sort).
+    """
+    ordered = sorted(candidates, key=natural_sort_key)
+    keep = []
+    discarded = []
+    for f in ordered:
+        if is_keyword_swatch(f):
+            discarded.append((f, "parola chiave colore nel nome file"))
+        else:
+            keep.append(f)
+
+    if swatch_position in ("first", "last") and len(keep) > 1:
+        picked = keep.pop(0) if swatch_position == "first" else keep.pop(-1)
+        discarded.append((picked, f"posizione '{swatch_position}' configurata per il brand"))
+
+    return keep, discarded
 
 
 def optimize_jpeg_image(file_path):
@@ -67,6 +117,7 @@ def resolve_config(brand, cli_ean_column, cli_code_columns):
     saved = load_config(brand) or {}
     ean_column = cli_ean_column or saved.get("ean_column")
     code_columns = cli_code_columns or saved.get("code_columns")
+    swatch_position = saved.get("swatch_position")
 
     if not ean_column or not code_columns:
         sys.exit(
@@ -74,7 +125,7 @@ def resolve_config(brand, cli_ean_column, cli_code_columns):
             f"Esegui prima inspect_brand.py per individuare le colonne, poi "
             f"save_brand_config.py per salvarle (oppure passa --ean-column e --code-columns)."
         )
-    return ean_column, code_columns
+    return ean_column, code_columns, swatch_position
 
 
 def validate_columns(workbook, ean_column, code_columns):
@@ -107,15 +158,32 @@ def iter_unique_ean_rows(workbook, ean_column):
 
 
 def build_code(row, code_columns):
-    """Ritorna (codice_concatenato, colonne_usate, is_partial)."""
+    """Ritorna (codice_concatenato, segments[(colonna, valore_pulito)], is_partial)."""
     segments = []
     for col in code_columns:
         val = row.get(col)
         if val not in (None, ""):
-            segments.append((col, str(val).strip()))
+            # rimuove anche gli spazi interni (es. "E1 M50 12 01 01" -> "E1M50120101"):
+            # nei file Excel il codice e' spesso "impaginato" con spazi che non compaiono nel nome file
+            cleaned = "".join(str(val).split())
+            if cleaned:
+                segments.append((col, cleaned))
     full_code = "".join(v for _, v in segments)
     is_partial = len(segments) < len(code_columns)
-    return full_code, [c for c, _ in segments], is_partial
+    return full_code, segments, is_partial
+
+
+def matches_exact(filename, full_code_lower):
+    """Prova a concatenare i primi k token del nome file finche' non combacia col codice."""
+    tokens = stem_tokens(filename)
+    joined = ""
+    for token in tokens:
+        joined += token.lower()
+        if joined == full_code_lower:
+            return True
+        if len(joined) > len(full_code_lower):
+            return False
+    return False
 
 
 def find_candidates(full_code, segments, remaining_files):
@@ -123,7 +191,8 @@ def find_candidates(full_code, segments, remaining_files):
     if not full_code:
         return [], None
 
-    exact = [f for f in remaining_files if code_token(f).lower() == full_code.lower()]
+    full_code_lower = full_code.lower()
+    exact = [f for f in remaining_files if matches_exact(f, full_code_lower)]
     if exact:
         return sorted(exact), "esatto"
 
@@ -146,17 +215,26 @@ def write_csv_report(path, fieldnames, rows):
     return path
 
 
-def run(season, brand, ean_column, code_columns, dry_run, skip_optimize):
+def run(season, brand, ean_column, code_columns, swatch_position, dry_run, skip_optimize):
     brand_dir = require_brand_dir(season, brand)
     excel_path = find_excel(brand_dir)
     workbook = read_workbook(excel_path)
     validate_columns(workbook, ean_column, code_columns)
 
+    renamed_dir = os.path.join(brand_dir, RENAMED_SUBDIR)
+    discarded_dir = os.path.join(brand_dir, DISCARDED_SUBDIR)
+
     print(f"Cartella: {brand_dir}")
     print(f"Excel: {os.path.basename(excel_path)} (fogli: {list(workbook.keys())})")
     print(f"Colonna EAN: {ean_column!r}  |  Colonne codice: {code_columns}")
+    print(f"Posizione campione colore (swatch_position): {swatch_position!r}")
+    print(f"Le foto rinominate verranno spostate in: {renamed_dir}")
+    print(f"Le foto scartate (campione colore) verranno spostate in: {discarded_dir}")
     if dry_run:
-        print(">>> MODALITA' DRY-RUN: nessun file verra' rinominato <<<")
+        print(">>> MODALITA' DRY-RUN: nessun file verra' rinominato, spostato o scartato <<<")
+    else:
+        os.makedirs(renamed_dir, exist_ok=True)
+        os.makedirs(discarded_dir, exist_ok=True)
 
     if not skip_optimize and not dry_run:
         optimize_images_in_folder(brand_dir)
@@ -168,11 +246,13 @@ def run(season, brand, ean_column, code_columns, dry_run, skip_optimize):
     renamed_rows = []
     unmatched_rows = []
     red_flag_rows = []
+    discarded_rows = []
     renamed_count = 0
 
     for sheet_name, ean, row in iter_unique_ean_rows(workbook, ean_column):
-        full_code, used_columns, is_partial = build_code(row, code_columns)
-        candidates, match_type = find_candidates(full_code, [(c, row.get(c)) for c in used_columns], remaining_files)
+        full_code, segments, is_partial = build_code(row, code_columns)
+        used_columns = [c for c, _ in segments]
+        candidates, match_type = find_candidates(full_code, segments, remaining_files)
 
         if not candidates:
             unmatched_rows.append({
@@ -197,7 +277,20 @@ def run(season, brand, ean_column, code_columns, dry_run, skip_optimize):
             })
             continue
 
-        for i, old_name in enumerate(candidates, start=1):
+        product_photos, swatch_photos = split_swatches(candidates, swatch_position)
+
+        for old_name, motivo in swatch_photos:
+            discarded_rows.append({
+                "vecchio_nome": old_name,
+                "ean": ean,
+                "foglio": sheet_name,
+                "motivo": motivo,
+            })
+            if not dry_run:
+                os.rename(os.path.join(brand_dir, old_name), os.path.join(discarded_dir, old_name))
+            remaining_files.discard(old_name)
+
+        for i, old_name in enumerate(product_photos, start=1):
             ext = os.path.splitext(old_name)[1]
             new_name = f"{ean}_{i}{ext}"
             renamed_rows.append({
@@ -209,7 +302,7 @@ def run(season, brand, ean_column, code_columns, dry_run, skip_optimize):
                 "colonne_usate": ",".join(used_columns),
             })
             if not dry_run:
-                os.rename(os.path.join(brand_dir, old_name), os.path.join(brand_dir, new_name))
+                os.rename(os.path.join(brand_dir, old_name), os.path.join(renamed_dir, new_name))
             remaining_files.discard(old_name)
             renamed_count += 1
 
@@ -233,12 +326,25 @@ def run(season, brand, ean_column, code_columns, dry_run, skip_optimize):
         ["foglio", "ean", "codice_atteso", "colonne_usate", "tipo_match", "n_candidati", "esempio_candidati"],
         red_flag_rows,
     )
+    orphan_photo_rows = [{"nome_file": f, "token_iniziali": " ".join(stem_tokens(f))} for f in sorted(remaining_files)]
+    orphan_photo_report = write_csv_report(
+        os.path.join(reports_dir, f"{prefix}foto_senza_ean_{brand}_{ts}.csv"),
+        ["nome_file", "token_iniziali"],
+        orphan_photo_rows,
+    )
+    discarded_report = write_csv_report(
+        os.path.join(reports_dir, f"{prefix}scartate_{brand}_{ts}.csv"),
+        ["vecchio_nome", "ean", "foglio", "motivo"],
+        discarded_rows,
+    )
 
     print()
     print("=== Riepilogo ===")
-    verb = "rinominabili (dry-run)" if dry_run else "rinominati"
+    verb = "rinominabili (dry-run)" if dry_run else f"rinominate e spostate in {renamed_dir}"
     print(f"Foto {verb}: {renamed_count}")
-    print(f"Foto rimaste senza corrispondenza EAN->file: {len(remaining_files)}")
+    disc_verb = "da scartare (dry-run)" if dry_run else f"scartate (campione colore) e spostate in {discarded_dir}"
+    print(f"Foto {disc_verb}: {len(discarded_rows)}" + (f" -> {discarded_report}" if discarded_report else ""))
+    print(f"Foto senza nessuna riga EAN corrispondente: {len(remaining_files)}" + (f" -> {orphan_photo_report}" if orphan_photo_report else ""))
     print(f"EAN senza foto corrispondente: {len(unmatched_rows)}" + (f" -> {unmatched_report}" if unmatched_report else ""))
     print(f"RED FLAG (match troppo generico, >{RED_FLAG_THRESHOLD} candidati): {len(red_flag_rows)}" + (f" -> {red_flag_report}" if red_flag_report else ""))
     if renamed_report:
@@ -266,10 +372,10 @@ def main():
     if args.code_columns:
         cli_code_columns = [c.strip() for c in args.code_columns.split(",") if c.strip()]
 
-    ean_column, code_columns = resolve_config(args.brand, args.ean_column, cli_code_columns)
+    ean_column, code_columns, swatch_position = resolve_config(args.brand, args.ean_column, cli_code_columns)
 
     start = time.time()
-    run(args.season, args.brand, ean_column, code_columns, args.dry_run, args.skip_optimize)
+    run(args.season, args.brand, ean_column, code_columns, swatch_position, args.dry_run, args.skip_optimize)
     print(f"\nCompletato in {time.time() - start:.2f}s")
 
 

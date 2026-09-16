@@ -24,13 +24,24 @@ def load_config(brand):
         return json.load(f)
 
 
-def save_config(brand, ean_column, code_columns, notes=""):
+def save_config(brand, ean_column, code_columns, notes="", swatch_position=None):
+    """swatch_position: "first"/"last" se in questo brand una foto per prodotto è
+    sempre solo un campione colore (senza borsa/gadget) in quella posizione della
+    serie, None/"none" se e' stato verificato che non serve (o non ancora verificato)."""
     os.makedirs(CONFIG_DIR, exist_ok=True)
     path = config_path(brand)
+
+    existing = load_config(brand) or {}
+    if swatch_position is None:
+        swatch_position = existing.get("swatch_position")
+    elif swatch_position == "none":
+        swatch_position = None
+
     config = {
         "ean_column": ean_column,
         "code_columns": code_columns,
-        "notes": notes,
+        "swatch_position": swatch_position,
+        "notes": notes or existing.get("notes", ""),
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)

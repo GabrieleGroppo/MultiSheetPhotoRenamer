@@ -36,7 +36,28 @@ def list_photos(brand_dir):
     return sorted(f for f in os.listdir(brand_dir) if f.lower().endswith(PHOTO_EXTENSIONS))
 
 
-def code_token(filename):
-    """Estrae il token 'codice' candidato dal nome file (parte prima del primo separatore)."""
+def stem_tokens(filename):
+    """Spezza il nome file (senza estensione) nei token separati da _ - o spazi.
+
+    Il codice prodotto puo' occupare un solo token (es. "91010339X95219_SN...")
+    oppure piu' token consecutivi (es. "E1M50120101_352_0" = modello + colore,
+    poi indice foto): per questo il matching esatto prova le concatenazioni dei
+    primi k token invece di assumere che il codice sia sempre il primo token.
+    """
     stem = os.path.splitext(filename)[0]
-    return re.split(r"[_\-\s]", stem, maxsplit=1)[0]
+    return [t for t in re.split(r"[_\-\s]+", stem) if t]
+
+
+def code_token(filename):
+    """Primo token del nome file: solo per la vista d'insieme di inspect_brand.py."""
+    tokens = stem_tokens(filename)
+    return tokens[0] if tokens else ""
+
+
+def natural_sort_key(filename):
+    """Chiave di ordinamento che tratta le sequenze di cifre come numeri (2 < 10),
+    cosi' "foto_2.jpg" precede "foto_10.jpg" invece di seguirla come farebbe
+    l'ordinamento lessicografico puro. Usata per decidere qual e' la prima/ultima
+    foto di una serie prodotto."""
+    stem = os.path.splitext(filename)[0].lower()
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", stem)]

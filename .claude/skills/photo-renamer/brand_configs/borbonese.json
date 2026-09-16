@@ -5,5 +5,6 @@
     "Parte",
     "Colore"
   ],
+  "swatch_position": null,
   "notes": "Auto-rilevato su ai26: filename = Modello+Parte+Colore concatenati, seguito da _SN<seriale>_CLOSEUP<nn>"
 }
