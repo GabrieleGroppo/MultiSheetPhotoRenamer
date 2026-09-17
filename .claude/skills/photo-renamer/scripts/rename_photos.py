@@ -3,7 +3,7 @@
 corrispondenza foto<->riga Excel dal codice prodotto contenuto nel nome file.
 
 Uso:
-  rename_photos.py <stagione> <brand> [--dry-run] [--skip-optimize]
+  rename_photos.py <stagione> <brand> [--dry-run] [--skip-compress]
                     [--ean-column NOME] [--code-columns "A,B,C"]
 
 Se --ean-column/--code-columns non sono passati, viene usata la
@@ -28,6 +28,8 @@ Logica di matching per ogni riga (deduplicata per EAN):
 Le foto rinominate con successo vengono spostate nella sottocartella
 "rinominate/" (dentro la cartella del brand), cosi' restano separate dagli
 originali non ancora processati e da eventuali foto senza corrispondenza.
+Le foto senza nessuna riga EAN corrispondente vengono spostate in
+"non_rinominate/" (mai cancellate).
 
 Foto "campione colore" (senza il prodotto): alcuni brand includono, per ogni
 prodotto, una foto che mostra solo il colore/materiale e non la borsa/gadget.
@@ -39,12 +41,20 @@ due modi:
      scarta sempre la prima/ultima foto di ogni serie - ma solo se restano
      almeno 2 foto dopo aver tolto quelle già escluse per parola chiave (mai
      azzerare le foto di un prodotto).
+
+Le foto rinominate e spostate in "rinominate/" sopra 1MB vengono infine
+compresse con ImageMagick (comando "magick"): prima si tenta di ridurre solo
+la qualita' JPEG (jpeg:extent) restando il piu' vicino possibile a ~1MB; se
+questo farebbe scendere la qualita' sotto una soglia minima (si vedrebbero
+gli artefatti di compressione), si riduce anche la risoluzione finche' non si
+trova una combinazione qualita'/dimensione accettabile.
 """
 import argparse
 import csv
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 
@@ -57,7 +67,10 @@ RED_FLAG_THRESHOLD = 7
 MAX_SIZE_MB = 1
 RENAMED_SUBDIR = "rinominate"
 DISCARDED_SUBDIR = "scartate"
-JPEG_QUALITY = 85
+NON_RENAMED_SUBDIR = "non_rinominate"
+COMPRESS_TARGET_KB = 1000
+COMPRESS_MIN_QUALITY = 70
+COMPRESS_RESIZE_DIMS = (2600, 2400, 2200, 2000, 1800, 1600, 1400, 1200, 1000)
 SWATCH_KEYWORDS = ("swatch", "colore", "color", "colour")
 
 
@@ -90,27 +103,73 @@ def split_swatches(candidates, swatch_position):
     return keep, discarded
 
 
-def optimize_jpeg_image(file_path):
-    if os.path.getsize(file_path) / (1024 * 1024) <= MAX_SIZE_MB:
-        return None
+def _magick_quality(path):
+    result = subprocess.run(["identify", "-format", "%Q", path], capture_output=True, text=True)
     try:
-        process = subprocess.run(
-            ["jpegoptim", f"--max={JPEG_QUALITY}", "--strip-all", file_path],
+        return int(result.stdout.strip())
+    except ValueError:
+        return 0
+
+
+def compress_image_magick(file_path):
+    """Comprime un JPG sopra MAX_SIZE_MB con ImageMagick (comando "magick"),
+    restando il piu' vicino possibile a ~COMPRESS_TARGET_KB senza scendere
+    sotto COMPRESS_MIN_QUALITY: prima prova a ridurre solo la qualita' JPEG
+    (jpeg:extent); se questo costringerebbe la qualita' troppo in basso (si
+    vedrebbe), riduce anche la risoluzione finche' la qualita' non torna
+    accettabile. Ritorna (bytes_prima, bytes_dopo, qualita_finale) oppure None
+    se il file non e' stato toccato (gia' piccolo, o magick non disponibile)."""
+    if os.path.getsize(file_path) <= MAX_SIZE_MB * 1024 * 1024:
+        return None
+
+    extent = f"{COMPRESS_TARGET_KB}KB"
+    fd, tmp_path = tempfile.mkstemp(suffix=os.path.splitext(file_path)[1])
+    os.close(fd)
+    try:
+        subprocess.run(
+            ["magick", file_path, "-define", f"jpeg:extent={extent}", tmp_path],
             capture_output=True, text=True,
         )
-        return process.returncode == 0
+        quality = _magick_quality(tmp_path)
+
+        if quality < COMPRESS_MIN_QUALITY:
+            for dim in COMPRESS_RESIZE_DIMS:
+                subprocess.run(
+                    ["magick", file_path, "-resize", f"{dim}x{dim}>", "-define", f"jpeg:extent={extent}", tmp_path],
+                    capture_output=True, text=True,
+                )
+                quality = _magick_quality(tmp_path)
+                if quality >= COMPRESS_MIN_QUALITY:
+                    break
+
+        before = os.path.getsize(file_path)
+        after = os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0
+        if 0 < after < before:
+            os.replace(tmp_path, file_path)
+            return before, after, quality
+        return None
     except FileNotFoundError:
-        return None  # jpegoptim non installato: ottimizzazione facoltativa, si salta
+        return None  # magick non installato: compressione facoltativa, si salta
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
-def optimize_images_in_folder(folder_path):
-    optimized = 0
+def compress_images_in_folder(folder_path):
+    compressed = 0
+    total_before = 0
+    total_after = 0
     for filename in list_photos(folder_path):
-        result = optimize_jpeg_image(os.path.join(folder_path, filename))
+        result = compress_image_magick(os.path.join(folder_path, filename))
         if result:
-            optimized += 1
-    if optimized:
-        print(f"Ottimizzate {optimized} immagini (>{MAX_SIZE_MB}MB) con jpegoptim.")
+            before, after, _ = result
+            compressed += 1
+            total_before += before
+            total_after += after
+    if compressed:
+        saved_mb = (total_before - total_after) / (1024 * 1024)
+        print(f"Compresse {compressed} immagini (>{MAX_SIZE_MB}MB) con ImageMagick (magick), risparmiati {saved_mb:.1f}MB.")
+    return compressed
 
 
 def resolve_config(brand, cli_ean_column, cli_code_columns):
@@ -215,7 +274,7 @@ def write_csv_report(path, fieldnames, rows):
     return path
 
 
-def run(season, brand, ean_column, code_columns, swatch_position, dry_run, skip_optimize):
+def run(season, brand, ean_column, code_columns, swatch_position, dry_run, skip_compress):
     brand_dir = require_brand_dir(season, brand)
     excel_path = find_excel(brand_dir)
     workbook = read_workbook(excel_path)
@@ -223,6 +282,7 @@ def run(season, brand, ean_column, code_columns, swatch_position, dry_run, skip_
 
     renamed_dir = os.path.join(brand_dir, RENAMED_SUBDIR)
     discarded_dir = os.path.join(brand_dir, DISCARDED_SUBDIR)
+    non_renamed_dir = os.path.join(brand_dir, NON_RENAMED_SUBDIR)
 
     print(f"Cartella: {brand_dir}")
     print(f"Excel: {os.path.basename(excel_path)} (fogli: {list(workbook.keys())})")
@@ -230,14 +290,13 @@ def run(season, brand, ean_column, code_columns, swatch_position, dry_run, skip_
     print(f"Posizione campione colore (swatch_position): {swatch_position!r}")
     print(f"Le foto rinominate verranno spostate in: {renamed_dir}")
     print(f"Le foto scartate (campione colore) verranno spostate in: {discarded_dir}")
+    print(f"Le foto senza EAN corrispondente verranno spostate in: {non_renamed_dir}")
     if dry_run:
         print(">>> MODALITA' DRY-RUN: nessun file verra' rinominato, spostato o scartato <<<")
     else:
         os.makedirs(renamed_dir, exist_ok=True)
         os.makedirs(discarded_dir, exist_ok=True)
-
-    if not skip_optimize and not dry_run:
-        optimize_images_in_folder(brand_dir)
+        os.makedirs(non_renamed_dir, exist_ok=True)
 
     photos = list_photos(brand_dir)
     print(f"Foto trovate: {len(photos)}")
@@ -338,13 +397,21 @@ def run(season, brand, ean_column, code_columns, swatch_position, dry_run, skip_
         discarded_rows,
     )
 
+    if not dry_run:
+        for old_name in sorted(remaining_files):
+            os.rename(os.path.join(brand_dir, old_name), os.path.join(non_renamed_dir, old_name))
+
+        if not skip_compress:
+            compress_images_in_folder(renamed_dir)
+
     print()
     print("=== Riepilogo ===")
     verb = "rinominabili (dry-run)" if dry_run else f"rinominate e spostate in {renamed_dir}"
     print(f"Foto {verb}: {renamed_count}")
     disc_verb = "da scartare (dry-run)" if dry_run else f"scartate (campione colore) e spostate in {discarded_dir}"
     print(f"Foto {disc_verb}: {len(discarded_rows)}" + (f" -> {discarded_report}" if discarded_report else ""))
-    print(f"Foto senza nessuna riga EAN corrispondente: {len(remaining_files)}" + (f" -> {orphan_photo_report}" if orphan_photo_report else ""))
+    orphan_verb = "senza nessuna riga EAN corrispondente (dry-run)" if dry_run else f"senza nessuna riga EAN corrispondente e spostate in {non_renamed_dir}"
+    print(f"Foto {orphan_verb}: {len(remaining_files)}" + (f" -> {orphan_photo_report}" if orphan_photo_report else ""))
     print(f"EAN senza foto corrispondente: {len(unmatched_rows)}" + (f" -> {unmatched_report}" if unmatched_report else ""))
     print(f"RED FLAG (match troppo generico, >{RED_FLAG_THRESHOLD} candidati): {len(red_flag_rows)}" + (f" -> {red_flag_report}" if red_flag_report else ""))
     if renamed_report:
@@ -363,7 +430,7 @@ def main():
     parser.add_argument("season")
     parser.add_argument("brand")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--skip-optimize", action="store_true")
+    parser.add_argument("--skip-compress", action="store_true", help="non comprimere le foto rinominate sopra 1MB")
     parser.add_argument("--ean-column")
     parser.add_argument("--code-columns", help="lista separata da virgole, in ordine")
     args = parser.parse_args()
@@ -375,7 +442,7 @@ def main():
     ean_column, code_columns, swatch_position = resolve_config(args.brand, args.ean_column, cli_code_columns)
 
     start = time.time()
-    run(args.season, args.brand, ean_column, code_columns, swatch_position, args.dry_run, args.skip_optimize)
+    run(args.season, args.brand, ean_column, code_columns, swatch_position, args.dry_run, args.skip_compress)
     print(f"\nCompletato in {time.time() - start:.2f}s")
 
 

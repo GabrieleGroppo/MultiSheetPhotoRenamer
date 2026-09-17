@@ -18,8 +18,9 @@ assets/<stagione>/<brand>/
 ├── *.xlsx              <- un solo file Excel, uno o più fogli
 ├── foto1.jpg            <- originali non ancora processati
 ├── foto2.jpg
-├── rinominate/          <- creata dallo script: foto rinominate spostate qui
+├── rinominate/          <- creata dallo script: foto rinominate (e compresse) spostate qui
 ├── scartate/            <- creata dallo script: foto "campione colore" spostate qui
+├── non_rinominate/      <- creata dallo script: foto senza EAN corrispondente spostate qui
 └── reports/             <- creata dallo script: report CSV
 ```
 
@@ -28,7 +29,11 @@ Le foto rinominate con successo vengono **spostate** in `rinominate/`, non
 solo rinominate sul posto: così restano separate dagli originali non ancora
 matchati e da eventuali foto senza corrispondenza EAN. Le foto "campione
 colore" (solo un colore/materiale, senza borsa/gadget visibile) vengono
-spostate in `scartate/` — **mai cancellate**.
+spostate in `scartate/` — **mai cancellate**. Le foto per cui non è stata
+trovata nessuna riga EAN corrispondente vengono spostate in
+`non_rinominate/` — anche queste **mai cancellate**, restano lì per
+revisione manuale (es. materiale di un'altra stagione finito nella cartella
+sbagliata, o varianti fuori listino).
 
 ## Invocazione
 
@@ -188,15 +193,29 @@ tocca file reali del cliente. Dopo conferma:
 python3 .claude/skills/photo-renamer/scripts/rename_photos.py <stagione> <brand>
 ```
 
-(stessa invocazione, senza `--dry-run`). Riporta all'utente il riepilogo
-finale e il percorso dei report in `assets/<stagione>/<brand>/reports/`
-(mapping vecchio→nuovo nome, EAN senza foto, eventuali RED FLAG non risolti).
+(stessa invocazione, senza `--dry-run`). Dopo la rinomina, lo script:
+- sposta le foto rimaste senza EAN corrispondente in `non_rinominate/`;
+- comprime con ImageMagick (`magick`) le foto in `rinominate/` sopra 1MB
+  (vedi Note sotto).
+
+Riporta all'utente il riepilogo finale e il percorso dei report in
+`assets/<stagione>/<brand>/reports/` (mapping vecchio→nuovo nome, EAN senza
+foto, eventuali RED FLAG non risolti).
 
 ## Note
 
-- L'ottimizzazione JPEG (`jpegoptim`) resta opzionale e "best effort": se il
-  binario non è installato viene saltata senza errori. Con `--skip-optimize`
-  la si disattiva esplicitamente.
+- **Compressione**: le foto in `rinominate/` sopra 1MB vengono compresse con
+  ImageMagick (comando `magick`, mai `convert` che è deprecato in IMv7):
+  prima si tenta di ridurre solo la qualità JPEG (`-define jpeg:extent=1000KB`)
+  restando il più vicino possibile a ~1MB; se la qualità risultante scende
+  sotto 70/100 (si vedrebbe), si ridimensiona anche l'immagine finché non si
+  trova una combinazione qualità/risoluzione accettabile — evita di
+  massacrare la qualità di scan ad altissima risoluzione pur di rientrare
+  nel limite di dimensione. È "best effort": se `magick` non è installato
+  viene saltata senza errori. Con `--skip-compress` la si disattiva
+  esplicitamente. Non fa backup degli originali prima di comprimere (la
+  compressione è lossy e irreversibile): se serve conservarli, copiali altrove
+  prima di eseguire lo script senza `--dry-run`.
 - Nessuna dipendenza esterna (niente pandas/openpyxl): la lettura xlsx è
   fatta con `xlsx_reader.py`, solo standard library.
 - Le righe Excel duplicate per lo stesso EAN (tipico quando lo stesso
