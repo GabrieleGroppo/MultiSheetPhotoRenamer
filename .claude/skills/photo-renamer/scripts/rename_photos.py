@@ -351,7 +351,7 @@ def run(season, brand, ean_column, code_columns, swatch_position, dry_run, skip_
 
         for i, old_name in enumerate(product_photos, start=1):
             ext = os.path.splitext(old_name)[1]
-            new_name = f"{ean}_{i}{ext}"
+            new_name = f"{ean}-{i}{ext}"
             renamed_rows.append({
                 "vecchio_nome": old_name,
                 "nuovo_nome": new_name,
